@@ -1,22 +1,39 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 # Trying to make it easier to insert handwritten signatures in a digital age.
 # Cause I don't have a scanner.
 # by moosd 2015
+#
+# Updated for Python3/svg output, by Dale Hithenor
 
-import sys, pygame
+import sys, os, pygame
 import operator
 from itertools import islice
-import tkFileDialog
-import Tkinter as tk
+from tkinter import filedialog
+import tkinter as tk
 
 # OPTIONS TO CHANGE
 line_thickness = 6
 antialiasing = False
-window_size = (640, 480)
+window_fraction = 2 / 3
 resize_on_save = False
 
 # REST OF CODE FOLLOWS:
+
+def save_svg(path, pts, size):
+    # Pad by half the stroke so the line isn't clipped at the bounding box edges
+    pad = line_thickness / 2
+    w, h = size
+    coords = " ".join(f"{x},{y}" for x, y in pts)
+    with open(path, "w") as fh:
+        fh.write(
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w + 2*pad}" height="{h + 2*pad}" '
+            f'viewBox="{-pad} {-pad} {w + 2*pad} {h + 2*pad}">\n'
+            f'  <polyline points="{coords}" fill="none" stroke="black" '
+            f'stroke-width="{line_thickness}" stroke-linecap="round" stroke-linejoin="round"/>\n'
+            '</svg>\n'
+        )
+
 def draw_instructions(instructions):
     font = pygame.font.Font(None, 24)
     background = pygame.Surface(screen.get_size())
@@ -41,7 +58,9 @@ def window(seq, n=2):
         yield result
 
 def scaler(p, scalefac):
-    return ((int(float(p[0] - minwidth) / (scalefac) * window_size[0])), (int(float(p[1] - minheight) / (scalefac) * window_size[1])))
+    # Same multiplier on both axes, otherwise the signature takes on the window's aspect ratio
+    side = min(window_size)
+    return (int((p[0] - minwidth) / scalefac * side), int((p[1] - minheight) / scalefac * side))
 
 def reinit_vars():
     global points, minwidth, minheight, maxwidth, maxheight
@@ -52,6 +71,10 @@ def reinit_vars():
     minheight = 0
 
 pygame.init()
+
+# [0] is the primary monitor; Info().current_w could span all monitors on some multi-head setups
+desktop_w, desktop_h = pygame.display.get_desktop_sizes()[0]
+window_size = (int(desktop_w * window_fraction), int(desktop_h * window_fraction))
 
 screen = pygame.display.set_mode(window_size)
 pygame.display.set_caption("TouchSigner")
@@ -86,32 +109,32 @@ while True:
                 pygame.mouse.set_visible(1)
                 root = tk.Tk()
                 root.withdraw()
-                f = tkFileDialog.asksaveasfilename(defaultextension=".png")
+                f = filedialog.asksaveasfilename(defaultextension=".png")
                 root.destroy()
-                if f == ():
-                   pygame.mouse.set_visible(0)
-                   pygame.event.set_grab(1)
-                   continue
+                # Cancel returns "" on current Tk, () on some older builds
+                if not f:
+                    pygame.mouse.set_visible(0)
+                    pygame.event.set_grab(1)
+                    continue
+                base = os.path.splitext(f)[0]
+
                 if resize_on_save:
-                    tosave = pygame.Surface(window_size, pygame.SRCALPHA, 32)
+                    scalefac = max(maxwidth - minwidth, maxheight - minheight)
+                    out_pts = [scaler(p, scalefac) for p in points]
+                    out_size = window_size
                 else:
-                    tosave = pygame.Surface((maxwidth-minwidth, maxheight-minheight), pygame.SRCALPHA, 32)
-                tosave = tosave.convert_alpha()
-                for pos1, pos2 in window(points, 2):
-                    if resize_on_save:
-                        scalefac = max([maxwidth - minwidth, maxheight - minheight])
-                        p1 = scaler(pos1, scalefac)
-                        p2 = scaler(pos2, scalefac)
-                    else:
-                        p1 = ((pos1[0] - minwidth), (pos1[1] - minheight))
-                        p2 = ((pos2[0] - minwidth), (pos2[1] - minheight))
+                    out_pts = [(x - minwidth, y - minheight) for x, y in points]
+                    out_size = (maxwidth - minwidth, maxheight - minheight)
+
+                tosave = pygame.Surface(out_size, pygame.SRCALPHA, 32).convert_alpha()
+                for p1, p2 in window(out_pts, 2):
                     if antialiasing:
                         pygame.draw.aaline(tosave, (0,0,0), p1, p2)
                     else:
                         pygame.draw.line(tosave, (0,0,0), p1, p2, line_thickness)
-                pygame.image.save(tosave, f)
-                del tosave
-                print "Saved!"
+                pygame.image.save(tosave, base + ".png")
+                save_svg(base + ".svg", out_pts, out_size)
+                print(f"Saved {base}.png and {base}.svg")
                 sys.exit()
         elif event.type == pygame.MOUSEMOTION:
             points.append(pygame.mouse.get_rel())
@@ -138,4 +161,3 @@ while True:
             else:
                 pygame.draw.line(screen, (0,0,0), p1, p2, line_thickness)
     pygame.display.flip()
-
